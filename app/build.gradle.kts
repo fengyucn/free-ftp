@@ -25,8 +25,8 @@ android {
         // tag "v1.9.1"). Kept as literals here rather than behind a constant: F-Droid's
         // update checker reads these values straight out of defaultConfig, and cannot
         // resolve a reference.
-        versionCode = 11
-        versionName = "1.9.1"
+        versionCode = 12
+        versionName = "1.9.1-selfuse1"
     }
 
     signingConfigs {

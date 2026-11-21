@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -28,12 +29,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.freeftp.app.storage.DownloadLocationStore
+import com.freeftp.app.storage.SettingsBackup
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-/** Settings. Currently one thing that matters: where downloads go. */
+/** Settings. Where downloads go, and moving the whole configuration between devices. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     downloads: DownloadLocationStore,
+    backup: SettingsBackup,
     onBack: () -> Unit,
 ) {
     // Recomposition key: bumped whenever the stored location changes.
@@ -41,6 +47,8 @@ fun SettingsScreen(
     val description = remember(revision) { downloads.describe() }
     val browsable = remember(revision) { downloads.isBrowsableByUser() }
     val lostAccess = remember(revision) { downloads.hasLostAccess }
+    var backupMessage by remember { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // The folder picker *is* the permission prompt: the user grants access to exactly
     // one directory. Dismissing it returns null, which leaves the previous choice alone.
@@ -50,6 +58,52 @@ fun SettingsScreen(
         if (uri != null) {
             downloads.useUserFolder(uri)
             revision++
+        }
+    }
+
+    val exportBackup = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            backupMessage = try {
+                val count = backup.exportTo(uri)
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
+                "Exported $count servers. The file contains passwords unencrypted — keep it safe."
+            } catch (e: Exception) {
+                "Export failed: ${e.message}"
+            }
+        }
+    }
+
+    val importBackup = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            backupMessage = try {
+                val result = backup.importFrom(uri)
+                revision++
+                buildString {
+                    append("Imported ${result.imported} servers")
+                    if (result.skipped > 0) append(", ${result.skipped} unreadable entries skipped")
+                    if (result.hostKeysRestored > 0) {
+                        append(", ${result.hostKeysRestored} host keys restored")
+                    }
+                    when {
+                        !result.downloadFolderKnown -> {}
+                        result.downloadFolderRestored -> append(", download folder restored")
+                        else -> append(", download folder grant not transferable — pick it again")
+                    }
+                    append(".")
+                }
+            } catch (e: Exception) {
+                "Import failed: ${e.message}"
+            }
         }
     }
 
@@ -112,6 +166,47 @@ fun SettingsScreen(
                 },
                 modifier = Modifier.padding(horizontal = 8.dp).testTag("reset-download-folder"),
             ) { Text("Use the default folder") }
+
+            HorizontalDivider()
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("Backup", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Move saved servers (including passwords), accepted SSH host keys and " +
+                        "the download folder to another device as a single JSON file. " +
+                        "The export keeps secrets unencrypted so any device can read it — " +
+                        "store the file somewhere you trust.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Import merges into what is already here: servers with the same id are " +
+                        "replaced, others are added. Nothing is deleted.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row {
+                    TextButton(
+                        onClick = {
+                            val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+                            exportBackup.launch("freeftp-backup-$stamp.json")
+                        },
+                        modifier = Modifier.testTag("export-settings"),
+                    ) { Text("Export…") }
+                    TextButton(
+                        onClick = {
+                            importBackup.launch(
+                                arrayOf("application/json", "application/octet-stream", "text/plain")
+                            )
+                        },
+                        modifier = Modifier.testTag("import-settings"),
+                    ) { Text("Import…") }
+                }
+                backupMessage?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("backup-result"),
+                    )
+                }
+            }
         }
     }
 }

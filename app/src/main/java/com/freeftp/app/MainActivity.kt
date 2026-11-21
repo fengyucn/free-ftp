@@ -120,6 +120,7 @@ private fun FreeFtpNavHost(navController: NavHostController, container: AppConta
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 downloads = container.downloads,
+                backup = container.backup,
                 onBack = { navController.popBackStack() },
             )
         }

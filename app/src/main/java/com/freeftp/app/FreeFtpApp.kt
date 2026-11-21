@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.freeftp.app.security.AndroidKeystoreCipher
 import com.freeftp.app.storage.DownloadLocationStore
+import com.freeftp.app.storage.SettingsBackup
 import com.freeftp.core.sftp.FileHostKeyStore
 import com.freeftp.core.sftp.HostKeyStore
 import com.freeftp.core.store.ServerProfileRepository
@@ -32,6 +33,11 @@ class AppContainer(context: Context) {
 
     /** Where downloads land, and how to build a destination for each file. */
     val downloads: DownloadLocationStore = DownloadLocationStore(context)
+
+    /** Exports/imports the whole configuration as one JSON file. */
+    val backup: SettingsBackup by lazy {
+        SettingsBackup(context, profiles, hostKeys, downloads)
+    }
 }
 
 class FreeFtpApp : Application() {
