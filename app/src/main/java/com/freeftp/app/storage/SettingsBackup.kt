@@ -8,8 +8,19 @@ import com.freeftp.core.RemotePath
 import com.freeftp.core.ServerProfile
 import com.freeftp.core.sftp.HostKeyStore
 import com.freeftp.core.store.ServerProfileRepository
+import java.security.SecureRandom
+import java.util.Base64
+import javax.crypto.AEADBadTagException
+import javax.crypto.Cipher
+import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 import org.json.JSONArray
 import org.json.JSONObject
+
+/** The file decrypted, but its contents did not verify — the password is wrong. */
+class BadPasswordException : Exception("wrong password (or the file is corrupted)")
 
 /** Outcome of an import, shown to the user in the settings screen. */
 data class ImportResult(
@@ -21,14 +32,14 @@ data class ImportResult(
 )
 
 /**
- * Moves the whole configuration between devices as one JSON file: saved servers
- * (passwords and keys in **plaintext**), accepted SSH host keys, and the download
- * folder preference.
+ * Moves the whole configuration between devices as one password-encrypted JSON file:
+ * saved servers, accepted SSH host keys, and the download folder preference.
  *
- * Secrets cannot ride along in their at-rest form: they are wrapped by the Android
- * key store on this device and no other device can unwrap them. So an export is by
- * definition a plaintext copy — the caller owns warning the user, and the user owns
- * where the file lands.
+ * The file is an envelope: PBKDF2-HmacSHA256 stretches the password into an AES-256
+ * key, and AES-GCM authenticates the payload — a wrong password fails the tag check
+ * instead of yielding garbage, which is how [BadPasswordException] knows to blame the
+ * password. Secrets sit **inside** the encrypted payload, since the at-rest form is
+ * wrapped by one device's key store and no other device could unwrap it.
  *
  * Import never deletes: profiles are merged by id (a matching id is replaced, an
  * unknown id is added), host keys are added when absent, and the download folder is
@@ -42,52 +53,77 @@ class SettingsBackup(
     private val downloads: DownloadLocationStore,
 ) {
 
-    fun exportTo(target: Uri): Int {
-        val root = JSONObject()
-        root.put("format", FORMAT)
-        root.put("app", "freeftp")
-        root.put("exportedAt", System.currentTimeMillis())
-        downloads.current.let { location ->
-            if (location is DownloadLocation.UserFolder) {
-                root.put("downloadFolder", location.treeUri.toString())
-            }
-        }
-        val servers = JSONArray()
-        profiles.load().forEach { profile -> servers.put(encodeProfile(profile)) }
-        root.put("servers", servers)
-        val keys = JSONArray()
-        hostKeys.entries().forEach { (key, fingerprint) ->
-            keys.put(JSONObject().put("host", key).put("fingerprint", fingerprint))
-        }
-        root.put("hostKeys", keys)
+    /** How many server profiles are stored, for the export confirmation line. */
+    fun countServers(): Int = profiles.load().size
+
+    fun exportTo(target: Uri, password: String) {
+        val payload = buildPayload()
+        val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
+        val key = deriveKey(password, salt, ITERATIONS)
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+        val ciphertext = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
+
+        val envelope = JSONObject()
+            .put("format", FORMAT)
+            .put("app", "freeftp")
+            .put("exportedAt", System.currentTimeMillis())
+            .put("kdf", KDF)
+            .put("iterations", ITERATIONS)
+            .put("salt", base64(salt))
+            .put("nonce", base64(cipher.iv))
+            .put("ciphertext", base64(ciphertext))
         context.contentResolver.openOutputStream(target, "wt")?.use { stream ->
-            stream.write(root.toString(2).toByteArray(Charsets.UTF_8))
+            stream.write(envelope.toString(2).toByteArray(Charsets.UTF_8))
         } ?: error("Could not open $target for writing")
-        return servers.length()
     }
 
-    fun importFrom(source: Uri): ImportResult {
+    fun importFrom(source: Uri, password: String): ImportResult {
         val root = context.contentResolver.openInputStream(source)?.use { stream ->
             JSONObject(String(stream.readBytes(), Charsets.UTF_8))
         } ?: error("Could not open $source for reading")
 
+        if (root.optInt("format") != FORMAT || root.optString("ciphertext").isEmpty()) {
+            error("Not a password-protected FreeFTP backup (format ${root.optInt("format")})")
+        }
+        val key = deriveKey(
+            password,
+            Base64.getDecoder().decode(root.getString("salt")),
+            root.getInt("iterations"),
+        )
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+            init(
+                Cipher.DECRYPT_MODE,
+                key,
+                javax.crypto.spec.GCMParameterSpec(
+                    TAG_BITS,
+                    Base64.getDecoder().decode(root.getString("nonce")),
+                ),
+            )
+        }
+        val plain = try {
+            cipher.doFinal(Base64.getDecoder().decode(root.getString("ciphertext")))
+        } catch (_: AEADBadTagException) {
+            throw BadPasswordException()
+        }
+        val payload = JSONObject(String(plain, Charsets.UTF_8))
+
         val existing = profiles.load().associateBy { it.id }
         var replaced = 0
         var added = 0
-        root.optJSONArray("servers")?.forEach { item ->
+        payload.optJSONArray("servers")?.forEach { item ->
             val profile = decodeProfile(item) ?: return@forEach
             profiles.save(profile)
             if (profile.id in existing) replaced++ else added++
         }
 
         var keysRestored = 0
-        root.optJSONArray("hostKeys")?.forEach { item ->
-            val key = item.optString("host")
+        payload.optJSONArray("hostKeys")?.forEach { item ->
+            val entry = item.optString("host")
             val fingerprint = item.optString("fingerprint")
-            if (key.isNotEmpty() && fingerprint.isNotEmpty() &&
-                hostKeys.entries()[key] == null
+            if (entry.isNotEmpty() && fingerprint.isNotEmpty() &&
+                hostKeys.entries()[entry] == null
             ) {
-                parseHostPort(key)?.let { (host, port) ->
+                parseHostPort(entry)?.let { (host, port) ->
                     hostKeys.remember(host, port, fingerprint)
                     keysRestored++
                 }
@@ -95,7 +131,7 @@ class SettingsBackup(
         }
 
         var folderRestored = false
-        val folder = root.optString("downloadFolder", "")
+        val folder = payload.optString("downloadFolder", "")
         val folderKnown = folder.isNotEmpty()
         if (folderKnown) {
             // The grant belongs to whichever app picked the folder, not to the file —
@@ -110,11 +146,39 @@ class SettingsBackup(
 
         return ImportResult(
             imported = replaced + added,
-            skipped = root.optJSONArray("servers")?.length()?.minus(replaced + added) ?: 0,
+            skipped = payload.optJSONArray("servers")?.length()?.minus(replaced + added) ?: 0,
             hostKeysRestored = keysRestored,
             downloadFolderRestored = folderRestored,
             downloadFolderKnown = folderKnown,
         )
+    }
+
+    // ---------------------------------------------------------------- payload
+
+    /** Everything worth carrying to another device, unencrypted. */
+    private fun buildPayload(): JSONObject {
+        val payload = JSONObject()
+        payload.put("exportedAt", System.currentTimeMillis())
+        downloads.current.let { location ->
+            if (location is DownloadLocation.UserFolder) {
+                payload.put("downloadFolder", location.treeUri.toString())
+            }
+        }
+        val servers = JSONArray()
+        profiles.load().forEach { profile -> servers.put(encodeProfile(profile)) }
+        payload.put("servers", servers)
+        val keys = JSONArray()
+        hostKeys.entries().forEach { (key, fingerprint) ->
+            keys.put(JSONObject().put("host", key).put("fingerprint", fingerprint))
+        }
+        payload.put("hostKeys", keys)
+        return payload
+    }
+
+    private fun deriveKey(password: String, salt: ByteArray, iterations: Int): SecretKey {
+        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, KEY_BITS)
+        val factory = SecretKeyFactory.getInstance(KDF)
+        return SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
     }
 
     // ---------------------------------------------------------------- serialization
@@ -191,8 +255,16 @@ class SettingsBackup(
         return key.substring(0, split) to port
     }
 
+    private fun base64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
+
     private companion object {
-        const val FORMAT = 1
+        const val FORMAT = 2
+        const val KDF = "PBKDF2WithHmacSHA256"
+        const val ITERATIONS = 600_000
+        const val SALT_BYTES = 16
+        const val KEY_BITS = 256
+        const val TAG_BITS = 128
+        const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
 

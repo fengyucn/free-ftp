@@ -19,14 +19,14 @@ android {
 
     defaultConfig {
         applicationId = "com.freeftp.app"
-        minSdk = 26
+        minSdk = 36
         targetSdk = 36
         // Bump both per release and tag the commit to match (versionName "1.7" ->
         // tag "v1.9.1"). Kept as literals here rather than behind a constant: F-Droid's
         // update checker reads these values straight out of defaultConfig, and cannot
         // resolve a reference.
-        versionCode = 12
-        versionName = "1.9.1-selfuse1"
+        versionCode = 13
+        versionName = "1.9.1-selfuse2"
     }
 
     signingConfigs {
