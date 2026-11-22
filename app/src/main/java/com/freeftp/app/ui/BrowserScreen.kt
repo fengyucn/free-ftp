@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
@@ -70,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.freeftp.core.EntrySort
 import com.freeftp.core.RemoteFile
 import com.freeftp.core.RemotePath
 import com.freeftp.core.transfer.TransferState
@@ -95,6 +97,7 @@ fun BrowserScreen(
     var deleting by remember { mutableStateOf<RemoteFile?>(null) }
     var showActions by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
+    var showSortMenu by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { viewModel.upload(context, it) }
@@ -165,6 +168,71 @@ fun BrowserScreen(
                     }
                 },
                 actions = {
+                    Box {
+                        IconButton(
+                            onClick = { showSortMenu = true },
+                            modifier = Modifier.testTag("sort"),
+                        ) {
+                            Icon(Icons.Filled.Sort, contentDescription = "Sort")
+                        }
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Name, A to Z") },
+                                trailingIcon = {
+                                    if (state.sort == EntrySort.NAME_ASC) {
+                                        Icon(Icons.Filled.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    showSortMenu = false
+                                    viewModel.setSort(EntrySort.NAME_ASC)
+                                },
+                                modifier = Modifier.testTag("sort-name-asc"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Name, Z to A") },
+                                trailingIcon = {
+                                    if (state.sort == EntrySort.NAME_DESC) {
+                                        Icon(Icons.Filled.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    showSortMenu = false
+                                    viewModel.setSort(EntrySort.NAME_DESC)
+                                },
+                                modifier = Modifier.testTag("sort-name-desc"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Time, newest first") },
+                                trailingIcon = {
+                                    if (state.sort == EntrySort.TIME_DESC) {
+                                        Icon(Icons.Filled.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    showSortMenu = false
+                                    viewModel.setSort(EntrySort.TIME_DESC)
+                                },
+                                modifier = Modifier.testTag("sort-time-desc"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Time, oldest first") },
+                                trailingIcon = {
+                                    if (state.sort == EntrySort.TIME_ASC) {
+                                        Icon(Icons.Filled.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    showSortMenu = false
+                                    viewModel.setSort(EntrySort.TIME_ASC)
+                                },
+                                modifier = Modifier.testTag("sort-time-asc"),
+                            )
+                        }
+                    }
                     IconButton(onClick = viewModel::refresh, modifier = Modifier.testTag("refresh")) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }

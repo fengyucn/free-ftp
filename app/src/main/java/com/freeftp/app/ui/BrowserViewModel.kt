@@ -6,12 +6,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.freeftp.app.AppContainer
+import com.freeftp.core.EntrySort
 import com.freeftp.core.RemoteFile
 import com.freeftp.core.RemotePath
 import com.freeftp.core.bulk.BulkTransferPolicy
 import com.freeftp.core.bulk.RemoteTreeScan
 import com.freeftp.core.bulk.ScannedFile
 import com.freeftp.core.bulk.scanForDownload
+import com.freeftp.core.sortedForDisplay
 import com.freeftp.core.transfer.FileTarget
 import com.freeftp.core.transfer.TransferDirection
 import com.freeftp.core.transfer.TransferRequest
@@ -49,6 +51,7 @@ data class BrowserState(
     /** Remote paths of the selected entries; non-empty means selection mode is on. */
     val selected: Set<String> = emptySet(),
     val pendingBulk: PendingBulkAction? = null,
+    val sort: EntrySort = EntrySort.NAME_ASC,
 ) {
     val selectionMode: Boolean get() = selected.isNotEmpty()
     val selectedEntries: List<RemoteFile> get() = entries.filter { it.path in selected }
@@ -79,6 +82,17 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
 
     fun refresh() = load(_state.value.path)
 
+    /**
+     * Re-orders what is on screen without re-fetching: sorting is a display concern,
+     * and the listing the server sent is exactly the data being rearranged.
+     */
+    fun setSort(sort: EntrySort) {
+        _state.value = _state.value.copy(
+            sort = sort,
+            entries = _state.value.entries.sortedForDisplay(sort),
+        )
+    }
+
     fun open(entry: RemoteFile) {
         if (entry.isDirectory) load(entry.path)
     }
@@ -95,7 +109,11 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { container.session.withClient { it.list(path) } } }
                 .onSuccess {
-                    _state.value = _state.value.copy(path = path, entries = it, loading = false)
+                    _state.value = _state.value.copy(
+                        path = path,
+                        entries = it.sortedForDisplay(_state.value.sort),
+                        loading = false,
+                    )
                 }
                 .onFailure {
                     _state.value = _state.value.copy(

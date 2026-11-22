@@ -77,6 +77,60 @@ class ServerProfileValidationTest {
     }
 
     @Test
+    fun `name descending keeps directories first`() {
+        val entries = listOf(
+            RemoteFile("/beta.txt", isDirectory = false),
+            RemoteFile("/Alpha", isDirectory = true),
+            RemoteFile("/alpha.txt", isDirectory = false),
+            RemoteFile("/zeta", isDirectory = true),
+        )
+        assertEquals(
+            listOf("zeta", "Alpha", "beta.txt", "alpha.txt"),
+            entries.sortedForDisplay(EntrySort.NAME_DESC).map { it.name },
+        )
+    }
+
+    @Test
+    fun `time descending puts newest file first and unknown timestamps last`() {
+        val entries = listOf(
+            RemoteFile("/old.txt", isDirectory = false, modifiedEpochMillis = 1_000L),
+            RemoteFile("/new.txt", isDirectory = false, modifiedEpochMillis = 3_000L),
+            RemoteFile("/mid.txt", isDirectory = false, modifiedEpochMillis = 2_000L),
+            RemoteFile("/unknown.txt", isDirectory = false, modifiedEpochMillis = null),
+        )
+        assertEquals(
+            listOf("new.txt", "mid.txt", "old.txt", "unknown.txt"),
+            entries.sortedForDisplay(EntrySort.TIME_DESC).map { it.name },
+        )
+    }
+
+    @Test
+    fun `time ascending puts oldest first and unknown timestamps last`() {
+        val entries = listOf(
+            RemoteFile("/old.txt", isDirectory = false, modifiedEpochMillis = 1_000L),
+            RemoteFile("/new.txt", isDirectory = false, modifiedEpochMillis = 3_000L),
+            RemoteFile("/unknown.txt", isDirectory = false, modifiedEpochMillis = null),
+            RemoteFile("/mid.txt", isDirectory = false, modifiedEpochMillis = 2_000L),
+        )
+        assertEquals(
+            listOf("old.txt", "mid.txt", "new.txt", "unknown.txt"),
+            entries.sortedForDisplay(EntrySort.TIME_ASC).map { it.name },
+        )
+    }
+
+    @Test
+    fun `time sorting still groups directories first`() {
+        val entries = listOf(
+            RemoteFile("/newfile.txt", isDirectory = false, modifiedEpochMillis = 3_000L),
+            RemoteFile("/newdir", isDirectory = true, modifiedEpochMillis = 2_000L),
+        )
+        assertEquals(
+            listOf("newdir", "newfile.txt"),
+            entries.sortedForDisplay(EntrySort.TIME_DESC).map { it.name },
+        )
+    }
+
+    @Test
     fun `permission bits render like ls -l`() {
         assertEquals("rw-r-----", permissionsToString(0b110_100_000))
         assertEquals("rwxr-xr-x", permissionsToString(0b111_101_101))

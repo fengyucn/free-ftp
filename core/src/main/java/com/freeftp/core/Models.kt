@@ -105,13 +105,48 @@ data class RemoteFile(
     val name: String get() = RemotePath.name(path)
 }
 
+/** How the browser orders a directory listing. Directories always group first. */
+enum class EntrySort {
+    NAME_ASC,
+    NAME_DESC,
+    TIME_ASC,
+    TIME_DESC,
+}
+
 /** Directories first, then names compared case-insensitively; ties broken case-sensitively so the order is total. */
 val RemoteFileOrdering: Comparator<RemoteFile> =
     compareByDescending<RemoteFile> { it.isDirectory }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
         .thenBy { it.name }
 
-fun List<RemoteFile>.sortedForDisplay(): List<RemoteFile> = sortedWith(RemoteFileOrdering)
+private val DirectoriesFirst: Comparator<RemoteFile> =
+    compareByDescending { it.isDirectory }
+
+private fun timeOrdering(descending: Boolean): Comparator<RemoteFile> =
+    // Directories group first as in every other mode. Entries whose modification
+    // time the server did not report sink to the bottom in both directions:
+    // an unknown date beats neither a newer nor an older one.
+    compareByDescending<RemoteFile> { it.isDirectory }
+        .thenBy { it.modifiedEpochMillis == null }
+        .thenComparator { a, b ->
+            val x = a.modifiedEpochMillis ?: 0L
+            val y = b.modifiedEpochMillis ?: 0L
+            if (descending) y.compareTo(x) else x.compareTo(y)
+        }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+
+/** [EntrySort.TIME_DESC] puts the newest first; unknown timestamps still sink. */
+fun List<RemoteFile>.sortedForDisplay(sort: EntrySort = EntrySort.NAME_ASC): List<RemoteFile> =
+    sortedWith(
+        when (sort) {
+            EntrySort.NAME_ASC -> RemoteFileOrdering
+            EntrySort.NAME_DESC -> DirectoriesFirst
+                .thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+                .thenByDescending { it.name }
+            EntrySort.TIME_ASC -> timeOrdering(descending = false)
+            EntrySort.TIME_DESC -> timeOrdering(descending = true)
+        },
+    )
 
 /** Renders Unix mode bits the way `ls -l` does, e.g. `rw-r-----`. */
 fun permissionsToString(mode: Int): String {
