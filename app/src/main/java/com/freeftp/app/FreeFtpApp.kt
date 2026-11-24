@@ -2,14 +2,23 @@ package com.freeftp.app
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import com.freeftp.app.security.AndroidKeystoreCipher
 import com.freeftp.app.storage.DownloadLocationStore
 import com.freeftp.app.storage.SettingsBackup
+import com.freeftp.app.transfer.TransferForegroundService
 import com.freeftp.core.sftp.FileHostKeyStore
 import com.freeftp.core.sftp.HostKeyStore
 import com.freeftp.core.store.ServerProfileRepository
+import com.freeftp.core.transfer.TransferState
 import java.io.File
 import java.security.Security
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 /**
@@ -44,10 +53,36 @@ class FreeFtpApp : Application() {
     lateinit var container: AppContainer
         private set
 
+    /** Process-lifetime scope for application-level observers. */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun onCreate() {
         super.onCreate()
         installFullBouncyCastle()
         container = AppContainer(this)
+        keepTransfersAlive()
+    }
+
+    /**
+     * Starts the keep-alive service whenever the transfer queue gains active work. The
+     * service stops itself once the queue drains. Watching the queue here rather than
+     * hooking each enqueue call site means every path that adds transfers — browser
+     * downloads, folder downloads, uploads — is covered by one observer.
+     */
+    private fun keepTransfersAlive() {
+        appScope.launch {
+            var alive = false
+            container.session.transfers.transfers.collect { list ->
+                val active = list.any { it.state == TransferState.QUEUED || it.state == TransferState.RUNNING }
+                if (active && !alive) {
+                    ContextCompat.startForegroundService(
+                        this@FreeFtpApp,
+                        Intent(this@FreeFtpApp, TransferForegroundService::class.java),
+                    )
+                }
+                alive = active
+            }
+        }
     }
 
     /**

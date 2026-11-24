@@ -1,9 +1,13 @@
 package com.freeftp.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
@@ -36,10 +40,26 @@ private object Routes {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         setContent {
             FreeFtpTheme {
                 FreeFtpNavHost(rememberNavController(), applicationContext.appContainer)
             }
+        }
+    }
+
+    /**
+     * The background-transfer notification needs POST_NOTIFICATIONS (API 33+) to be
+     * visible. The keep-alive service runs either way; this just makes its progress
+     * notification show. A permanent denial is respected — the call is a no-op then.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1,
+            )
         }
     }
 }
